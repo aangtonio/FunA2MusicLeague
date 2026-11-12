@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Music League · Ronda</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600&family=Instrument+Sans:wght@400;600&display=swap">
+<style>
+:root{--bg:#f6f1f4;--fg:#2a1d33;--mut:#7a6a85;--card:#ffffff;--line:#e2d6e6;--acc:#d6336c;--on:#fff;
+box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);color-scheme:light}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#1c1424;--fg:#f3e9f1;--mut:#a998b4;--card:#271c31;--line:#3b2c48;--acc:#ff6b9a;--on:#1c1424;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#1c1424;--fg:#f3e9f1;--mut:#a998b4;--card:#271c31;--line:#3b2c48;--acc:#ff6b9a;--on:#1c1424;color-scheme:dark}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:400 16px/1.5 "Instrument Sans",system-ui,sans-serif}
+main{max-width:760px;margin:0 auto;padding:20px 16px 48px}
+h1{font:600 clamp(2rem,8vw,3.2rem)/1.05 Fraunces,Georgia,serif;margin:8px 0 4px}
+.sub{color:var(--mut);margin:0 0 20px}
+.stage{aspect-ratio:16/9;background:#000;border-radius:14px;overflow:hidden;border:1px solid var(--line);position:relative}
+.stage #yt,.stage iframe{width:100%;height:100%;border:0;display:block}
+.empty{position:absolute;inset:0;display:grid;place-items:center;color:#cbbbd6;padding:16px;text-align:center}
+.now{margin:14px 0 4px;font:600 1.25rem/1.2 Fraunces,Georgia,serif}
+.range{color:var(--mut);font-size:.9rem;min-height:1.4em}
+.ctl{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0 18px;align-items:center}
+button{font:600 .95rem "Instrument Sans",system-ui,sans-serif;border:1px solid var(--line);background:var(--card);color:var(--fg);padding:10px 14px;border-radius:10px;cursor:pointer}
+button.pri{background:var(--acc);color:var(--on);border-color:var(--acc)}
+button:focus-visible,textarea:focus-visible,summary:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+ol{list-style:none;margin:0 0 24px;padding:0;border-top:1px solid var(--line)}
+li button{width:100%;text-align:left;border:0;border-bottom:1px solid var(--line);border-radius:0;background:transparent;display:flex;justify-content:space-between;gap:12px;padding:12px 4px;font-weight:400}
+li.on button{color:var(--acc);font-weight:600}
+li .t{color:var(--mut);font-size:.85rem;white-space:nowrap}
+details{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 14px}
+summary{cursor:pointer;font-weight:600}
+textarea{width:100%;min-height:150px;margin-top:10px;padding:10px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--fg);font:400 .9rem/1.5 ui-monospace,Menlo,monospace}
+.hint{color:var(--mut);font-size:.85rem;margin:8px 0}
+.err,.msg{color:var(--acc);font-size:.9rem;margin:6px 0;min-height:1.3em}
+</style>
+</head>
+<body>
+<main>
+<h1>Music League</h1>
+<p class="sub">Una canción por turno, con su fragmento.</p>
+
+<div class="stage"><div id="yt"></div><div class="empty" id="empty">Agrega canciones abajo y toca “Cargar ronda”.</div></div>
+<div class="now" id="now"></div>
+<div class="range" id="range"></div>
+
+<div class="ctl">
+  <button id="prev">← Anterior</button>
+  <button id="next" class="pri">Siguiente →</button>
+  <button id="share">Copiar link de la ronda</button>
+</div>
+<div class="msg" id="msg"></div>
+
+<ol id="list"></ol>
+
+<details open>
+  <summary>Canciones de la ronda</summary>
+  <p class="hint">Una por línea: <code>Título | link de YouTube | inicio | fin</code>. Inicio y fin son opcionales (ej. 3:45 y 6:15).</p>
+  <textarea id="src" spellcheck="false">Lido Shuffle | https://www.youtube.com/watch?v=4ksu86psqPU | 1:00 | 4:00
+Otra canción | https://www.youtube.com/watch?v=UEqTIwRrWvA</textarea>
+  <div class="err" id="err"></div>
+  <div class="ctl"><button class="pri" id="load">Cargar ronda</button><button id="theme">Cambiar tema</button></div>
+</details>
+</main>
+
+<script src="https://www.youtube.com/iframe_api"></script>
+<script>
+(function(){
+  var items=[],cur=-1,player=null,apiReady=false,pending=null;
+  var $=function(id){return document.getElementById(id)};
+
+  function secs(s){
+    if(!s)return null; s=s.trim(); if(!s)return null;
+    var p=s.split(":").map(Number); if(p.some(isNaN))return NaN;
+    return p.reduce(function(a,n){return a*60+n},0);
+  }
+  function fmt(n){var h=Math.floor(n/3600),m=Math.floor(n%3600/60),s=n%60;
+    return (h?h+":"+String(m).padStart(2,"0"):m)+":"+String(s).padStart(2,"0")}
+  function vid(u){var m=u.match(/(?:v=|youtu\.be\/|embed\/|shorts\/)([\w-]{11})/);return m?m[1]:null}
+
+  function parse(){
+    var out=[],errs=[];
+    $("src").value.split("\n").forEach(function(line,i){
+      if(!line.trim())return;
+      var p=line.split("|").map(function(x){return x.trim()});
+      var id=vid(p[1]||""),a=secs(p[2]),b=secs(p[3]);
+      if(!id){errs.push("Línea "+(i+1)+": no encontré un link de YouTube válido.");return}
+      if(isNaN(a)||isNaN(b)){errs.push("Línea "+(i+1)+": usa tiempos como 3:45.");return}
+      if(a!=null&&b!=null&&b<=a){errs.push("Línea "+(i+1)+": el fin debe ser mayor que el inicio.");return}
+      out.push({title:p[0]||"Canción "+(out.length+1),id:id,a:a,b:b});
+    });
+    $("err").textContent=errs.join(" ");
+    return out;
+  }
+
+  function renderList(){
+    var ol=$("list"); ol.innerHTML="";
+    items.forEach(function(it,i){
+      var li=document.createElement("li"); if(i===cur)li.className="on";
+      var b=document.createElement("button");
+      var t=document.createElement("span"); t.textContent=it.title;
+      var r=document.createElement("span"); r.className="t";
+      r.textContent=it.a!=null||it.b!=null?fmt(it.a||0)+(it.b!=null?" – "+fmt(it.b):""):"completo";
+      b.appendChild(t); b.appendChild(r); b.onclick=function(){play(i)};
+      li.appendChild(b); ol.appendChild(li);
+    });
+  }
+
+  function play(i){
+    if(i<0||i>=items.length)return;
+    cur=i; var it=items[i];
+    $("empty").style.display="none";
+    $("now").textContent=it.title;
+    $("range").textContent=it.a!=null||it.b!=null?"Fragmento: "+fmt(it.a||0)+(it.b!=null?" a "+fmt(it.b):" en adelante"):"Video completo";
+    renderList();
+    var opts={videoId:it.id};
+    if(it.a!=null)opts.startSeconds=it.a;
+    if(it.b!=null)opts.endSeconds=it.b;
+    if(!apiReady){pending=opts;return}
+    if(!player){
+      player=new YT.Player("yt",{width:"100%",height:"100%",videoId:it.id,
+        playerVars:{autoplay:1,playsinline:1,rel:0,start:it.a||0,end:it.b||undefined},
+        events:{onStateChange:function(e){if(e.data===YT.PlayerState.ENDED&&cur<items.length-1)play(cur+1)},
+                onError:function(){$("range").textContent="Este video no permite reproducirse aquí. Pasando a la siguiente…";
+                  setTimeout(function(){if(cur<items.length-1)play(cur+1)},1800)}}});
+    }else{player.loadVideoById(opts)}
+  }
+
+  window.onYouTubeIframeAPIReady=function(){
+    apiReady=true;
+    if(pending&&cur>=0){var c=cur;pending=null;play(c)}
+  };
+
+  function load(){
+    items=parse(); cur=-1; renderList();
+    try{localStorage.setItem("ml-src",$("src").value)}catch(e){}
+    if(items.length)play(0);
+  }
+
+  function enc(s){return btoa(unescape(encodeURIComponent(s))).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,"")}
+  function dec(s){s=s.replace(/-/g,"+").replace(/_/g,"/");while(s.length%4)s+="=";return decodeURIComponent(escape(atob(s)))}
+
+  $("share").onclick=function(){
+    var url=location.href.split("#")[0]+"#"+enc($("src").value);
+    var done=function(){$("msg").textContent="Link copiado. Pégalo en WhatsApp o donde quieras."};
+    if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(url).then(done,function(){window.prompt("Copia este link:",url)})}
+    else{window.prompt("Copia este link:",url)}
+  };
+  $("load").onclick=load;
+  $("next").onclick=function(){play(cur+1)};
+  $("prev").onclick=function(){play(cur-1)};
+  $("theme").onclick=function(){
+    var d=document.documentElement,dark=getComputedStyle(d).colorScheme==="dark";
+    d.setAttribute("data-theme",dark?"light":"dark");
+  };
+
+  // Al abrir: primero el link compartido, si no, lo guardado en el navegador
+  var h=location.hash.slice(1),loaded=false;
+  if(h){try{$("src").value=dec(h);loaded=true}catch(e){}}
+  if(!loaded){try{var s=localStorage.getItem("ml-src");if(s)$("src").value=s}catch(e){}}
+  items=parse(); renderList();
+  if(loaded&&items.length){cur=0;$("now").textContent=items[0].title;$("empty").textContent="Toca “Cargar ronda” para empezar."}
+})();
+</script>
+</body>
+</html>
